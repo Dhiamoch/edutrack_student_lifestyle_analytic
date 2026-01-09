@@ -6,12 +6,11 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import kagglehub
 from kagglehub import KaggleDatasetAdapter
-from sklearn.preprocessing import LabelEncoder
-from sklearn.linear_model import LinearRegression, LogisticRegression
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-from sklearn.model_selection import train_test_split
+import joblib
+import os
 import warnings
 warnings.filterwarnings('ignore')
+
 # ========== PAGE CONFIG ==========
 st.set_page_config(
     page_title="Dashboard Analisis Gaya Hidup Mahasiswa",
@@ -20,7 +19,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ========== LOAD DATA & TRAIN MODELS ==========
+# ========== MUAT DATA & MODEL ==========
 @st.cache_resource
 def load_data():
     df = kagglehub.dataset_load(
@@ -31,43 +30,39 @@ def load_data():
     return df
 
 @st.cache_resource
-def train_models(df):
-    df_model = df.copy()
+def load_models():
+    """Load pre-trained models dari pkl files"""
+    models_dir = 'models'
     
-    # Encode Stress Level
-    le = LabelEncoder()
-    df_model['Stress_Level_Encoded'] = le.fit_transform(df_model['Stress_Level'])
+    # Check if models directory exists
+    if not os.path.exists(models_dir):
+        st.error("❌ Folder 'models' tidak ditemukan!")
+        st.error("Silakan jalankan notebook terlebih dahulu untuk melatih dan menyimpan models.")
+        st.stop()
     
-    feature_cols = ['Study_Hours_Per_Day', 'Sleep_Hours_Per_Day', 'Physical_Activity_Hours_Per_Day', 
-                    'Social_Hours_Per_Day', 'Extracurricular_Hours_Per_Day']
+    try:
+        # Load models
+        rf_reg_model = joblib.load(os.path.join(models_dir, 'rf_reg_model.pkl'))
+        rf_clf_model = joblib.load(os.path.join(models_dir, 'rf_clf_model.pkl'))
+        le = joblib.load(os.path.join(models_dir, 'label_encoder.pkl'))
+        feature_cols = joblib.load(os.path.join(models_dir, 'feature_cols.pkl'))
+        
+        return rf_reg_model, rf_clf_model, le, feature_cols
     
-    # Regression Model
-    X_reg = df_model[feature_cols]
-    y_reg = df_model['GPA']
-    X_train_reg, X_test_reg, y_train_reg, y_test_reg = train_test_split(X_reg, y_reg, test_size=0.2, random_state=42)
-    
-    rf_reg_model = RandomForestRegressor(n_estimators=100, random_state=42, max_depth=10)
-    rf_reg_model.fit(X_train_reg, y_train_reg)
-    
-    # Classification Model
-    X_clf = df_model[feature_cols + ['GPA']]
-    y_clf = df_model['Stress_Level_Encoded']
-    X_train_clf, X_test_clf, y_train_clf, y_test_clf = train_test_split(X_clf, y_clf, test_size=0.2, random_state=42, stratify=y_clf)
-    
-    rf_clf_model = RandomForestClassifier(n_estimators=100, random_state=42, max_depth=10)
-    rf_clf_model.fit(X_train_clf, y_train_clf)
-    
-    return rf_reg_model, rf_clf_model, le, feature_cols, df_model
+    except FileNotFoundError as e:
+        st.error(f"❌ Salah satu file model tidak ditemukan: {str(e)}")
+        st.error("Silakan jalankan notebook untuk melatih dan menyimpan models.")
+        st.stop()
 
-# Load data
+# Load data dan models
 df = load_data()
-rf_reg_model, rf_clf_model, le, feature_cols, df_model = train_models(df)
+rf_reg_model, rf_clf_model, le, feature_cols = load_models()
 
-# ========== TITLE & SIDEBAR ==========
+# ========== JUDUL & SIDEBAR ==========
 st.title("Dashboard Analisis Gaya Hidup Mahasiswa")
 st.markdown("---")
 
-# ========== TABS ==========
+# ========== TAB-TAB ==========
 tab1, tab2, tab3 = st.tabs(["EDA & Visualisasi", "Prediksi Model", "Simulator What-If"])
 
 # ========== TAB 1: EDA & VISUALISASI ==========
@@ -140,7 +135,7 @@ with tab1:
     box_fig.update_layout(height=500, showlegend=False)
     st.plotly_chart(box_fig, use_container_width=True)
     
-    # Statistics
+    # Statistik
     st.subheader("Statistik Data Berdasarkan Level Stress")
     stress_stats = df.groupby('Stress_Level')[feature_cols + ['GPA']].agg(['mean', 'std', 'min', 'max'])
     st.dataframe(stress_stats, use_container_width=True)
@@ -209,7 +204,7 @@ with tab2:
         else:
             st.error("Stress tinggi - intervensi mendesak direkomendasikan")
     
-    # Comparison with dataset
+    # Perbandingan dengan dataset
     st.markdown("---")
     st.subheader("Perbandingan dengan Distribusi Dataset")
     
@@ -226,7 +221,7 @@ with tab2:
     with col3:
         avg_study = df['Study_Hours_Per_Day'].mean()
         st.metric("Rata-rata Jam Belajar", f"{avg_study:.1f}", delta=f"{study_hours - avg_study:+.1f}")
-# ========== TAB 3: WHAT IF SIMULATOR ==========
+# ========== TAB 3: SIMULATOR WHAT-IF ==========
 with tab3:
     st.header("Simulator What-If")
     st.markdown("Simulasikan berbagai skenario gaya hidup dan lihat dampaknya terhadap GPA dan Level Stress!")
@@ -272,7 +267,7 @@ with tab3:
         with result_col2:
             st.metric("Level Stress Terprediksi", sim_stress)
         
-        # Create comparison chart
+        # Buat grafik perbandingan
         comparison_data = pd.DataFrame({
             'Parameter': ['Jam Belajar', 'Jam Tidur', 'Aktivitas Fisik', 'Jam Bersosialisasi', 'Jam Ekstrakurikuler'],
             'Input Anda': [sim_study, sim_sleep, sim_activity, sim_social, sim_extra],
@@ -297,7 +292,7 @@ with tab3:
     
     st.markdown("---")
     
-    # Multiple Scenarios Comparison
+    # Perbandingan banyak skenario
     st.subheader("Bandingkan Berbagai Skenario")
     
     # Predefined scenarios
@@ -327,7 +322,7 @@ with tab3:
         }
     }
     
-    # Calculate predictions for all scenarios
+    # Hitung prediksi untuk semua skenario
     scenario_results = []
     for scenario_name, params in scenarios.items():
         input_reg = np.array([[params['Study_Hours'], params['Sleep_Hours'], params['Physical_Activity'],
@@ -350,7 +345,7 @@ with tab3:
     results_df = pd.DataFrame(scenario_results)
     st.dataframe(results_df, use_container_width=True)
     
-    # Visualization: GPA vs Stress for all scenarios
+    # Visualisasi: GPA vs Jam Belajar untuk semua skenario
     scenario_viz = px.scatter(
         results_df,
         x='GPA',
@@ -365,7 +360,7 @@ with tab3:
     scenario_viz.update_traces(textposition='top center')
     st.plotly_chart(scenario_viz, use_container_width=True)
     
-    # Recommendations
+    # Rekomendasi
     st.markdown("---")
     st.subheader("Rekomendasi")
     
@@ -383,7 +378,7 @@ with tab3:
         st.success("Skenario Anda terlihat seimbang! Lanjutkan menjaga gaya hidup ini.")
 
 
-# ========== FOOTER ==========
+# Footer
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center'>
