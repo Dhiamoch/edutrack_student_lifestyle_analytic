@@ -118,8 +118,8 @@ with tab1:
     if metadata and 'all_models_comparison' in metadata:
         with st.expander("Perbandingan Semua Model Klasifikasi (Klik untuk expand)", expanded=False):
             comparison_df = pd.DataFrame([
-                {'Model': model_name, 'Akurasi': f"{acc:.4f} ({acc:.2%})"}
-                for model_name, acc in sorted(metadata['all_models_comparison'].items(), key=lambda x: x[1], reverse=True)
+                {'Model': model_name, 'CV Akurasi': f"{scores['cv']:.4f}", 'Val Akurasi': f"{scores['val']:.4f}", 'Test Akurasi': f"{scores['test']:.4f} ({scores['test']:.2%})"}
+                for model_name, scores in sorted(metadata['all_models_comparison'].items(), key=lambda x: x[1]['test'], reverse=True)
             ])
             
             st.markdown("### Hasil Perbandingan 4 Model dengan Cross-Validation 5-Fold:")
@@ -133,6 +133,7 @@ with tab1:
             - Random Forest Classifier dengan 5-Fold CV
             - XGBoost dengan GridSearchCV (54 kombinasi parameter)
             - XGBoost dengan RandomizedSearchCV (20 iterasi random)
+            
             """)
     
     st.markdown("---")
@@ -327,69 +328,106 @@ with tab3:
         st.markdown("### Buat Skenario Anda:")
         scenario_name = st.text_input("Nama Skenario", "Skenario Saya")
         
-        slider_col1, slider_col2 = st.columns(2)
+        input_col1, input_col2 = st.columns(2)
         
-        with slider_col1:
-            sim_study = st.slider("Jam Belajar", 0.0, 12.0, 5.0, step=0.5, key="sim_study")
-            sim_activity = st.slider("Aktivitas Fisik (Jam)", 0.0, 10.0, 2.0, step=0.5, key="sim_activity")
-            sim_social = st.slider("Jam Bersosialisasi", 0.0, 10.0, 2.0, step=0.5, key="sim_social")
+        with input_col1:
+            sim_study = st.number_input("Jam Belajar (jam)", min_value=0.0, max_value=24.0, value=0.0, step=0.5, key="sim_study")
+            sim_activity = st.number_input("Aktivitas Fisik (jam)", min_value=0.0, max_value=24.0, value=0.0, step=0.5, key="sim_activity")
+            sim_social = st.number_input("Jam Bersosialisasi (jam)", min_value=0.0, max_value=24.0, value=0.0, step=0.5, key="sim_social")
         
-        with slider_col2:
-            sim_sleep = st.slider("Jam Tidur", 0.0, 12.0, 7.0, step=0.5, key="sim_sleep")
-            sim_extra = st.slider("Jam Ekstrakurikuler", 0.0, 10.0, 2.0, step=0.5, key="sim_extra")
+        with input_col2:
+            sim_sleep = st.number_input("Jam Tidur (jam)", min_value=0.0, max_value=24.0, value=0.0, step=0.5, key="sim_sleep")
+            sim_extra = st.number_input("Jam Ekstrakurikuler (jam)", min_value=0.0, max_value=24.0, value=0.0, step=0.5, key="sim_extra")
         
-        # Predict for custom scenario
-        sim_input_reg = np.array([[sim_study, sim_sleep, sim_activity, sim_social, sim_extra]])
-        sim_gpa = rf_reg_model.predict(sim_input_reg)[0]
+        # Hitung total jam
+        total_hours = sim_study + sim_sleep + sim_activity + sim_social + sim_extra
         
-        sim_input_clf = np.array([[sim_study, sim_sleep, sim_activity, sim_social, sim_extra, sim_gpa]])
-        sim_stress_encoded = rf_clf_model.predict(sim_input_clf)[0]
-        sim_stress = le.inverse_transform([int(sim_stress_encoded)])[0]
+        st.markdown("---")
+        
+        # Display total jam dengan warna berdasarkan validitas
+        if total_hours < 24:
+            st.warning(f"Total harus tepat 24 jam per hari. Sisa: {24 - total_hours:.1f} jam")
+            button_disabled = True
+        elif total_hours > 24:
+            st.error(f"⚠️ Total Jam: {total_hours:.1f} jam (Melebihi 24 jam!)")
+            st.error(f"Total harus tepat 24 jam per hari. Kurangi: {total_hours - 24:.1f} jam")
+            button_disabled = True
+        else:
+            st.success(f"✅ Total Jam: {total_hours:.1f} jam (Tepat 24 jam - Valid!)")
+            button_disabled = False
+        
+        st.markdown("---")
+        
+        # Button untuk proses prediksi
+        if st.button("🚀 Proses Prediksi Skenario", use_container_width=True, disabled=button_disabled):
+            # Predict for custom scenario
+            sim_input_reg = np.array([[sim_study, sim_sleep, sim_activity, sim_social, sim_extra]])
+            sim_gpa = rf_reg_model.predict(sim_input_reg)[0]
+            
+            # Classifier menggunakan hanya 5 lifestyle features (tanpa GPA untuk menghindari data leakage)
+            sim_input_clf = np.array([[sim_study, sim_sleep, sim_activity, sim_social, sim_extra]])
+            sim_stress_encoded = rf_clf_model.predict(sim_input_clf)[0]
+            sim_stress = le.inverse_transform([int(sim_stress_encoded)])[0]
+            
+            # Simpan hasil ke session state
+            st.session_state.sim_gpa = sim_gpa
+            st.session_state.sim_stress = sim_stress
+            st.session_state.scenario_processed = True
+            st.success("✅ Prediksi selesai! Lihat hasil di sebelah kanan.")
     
     with col2:
         st.markdown("### Hasil Skenario Anda:")
         
-        result_col1, result_col2 = st.columns(2)
-        
-        with result_col1:
-            st.metric("GPA Terprediksi", f"{sim_gpa:.2f}")
-        
-        with result_col2:
-            st.metric("Level Stress Terprediksi", sim_stress)
-        
-        # Grafik perbandingan
-        comparison_data = pd.DataFrame({
-            'Parameter': [
-                FEATURE_NAMES['Study_Hours_Per_Day'],
-                FEATURE_NAMES['Sleep_Hours_Per_Day'],
-                FEATURE_NAMES['Physical_Activity_Hours_Per_Day'],
-                FEATURE_NAMES['Social_Hours_Per_Day'],
-                FEATURE_NAMES['Extracurricular_Hours_Per_Day']
-            ],
-            'Skenario Anda': [sim_study, sim_sleep, sim_activity, sim_social, sim_extra],
-            'Rata-rata Dataset': [
-                df['Study_Hours_Per_Day'].mean(),
-                df['Sleep_Hours_Per_Day'].mean(),
-                df['Physical_Activity_Hours_Per_Day'].mean(),
-                df['Social_Hours_Per_Day'].mean(),
-                df['Extracurricular_Hours_Per_Day'].mean()
-            ]
-        })
-        
-        comparison_fig = px.bar(
-            comparison_data,
-            x='Parameter',
-            y=['Skenario Anda', 'Rata-rata Dataset'],
-            barmode='group',
-            title='Skenario Anda vs Rata-rata Dataset',
-            color_discrete_map={'Skenario Anda': '#3498db', 'Rata-rata Dataset': '#95a5a6'}
-        )
-        comparison_fig.update_layout(
-            xaxis_title="Jenis Aktivitas",
-            yaxis_title="Jumlah Jam",
-            height=400
-        )
-        st.plotly_chart(comparison_fig, use_container_width=True)
+        # Tampilkan hasil hanya jika sudah diproses
+        if 'scenario_processed' in st.session_state and st.session_state.scenario_processed:
+            sim_gpa = st.session_state.sim_gpa
+            sim_stress = st.session_state.sim_stress
+            
+            result_col1, result_col2 = st.columns(2)
+            
+            with result_col1:
+                st.metric("GPA Terprediksi", f"{sim_gpa:.2f}")
+            
+            with result_col2:
+                st.metric("Level Stress Terprediksi", sim_stress)
+            
+            st.markdown("---")
+            
+            # Grafik perbandingan
+            comparison_data = pd.DataFrame({
+                'Parameter': [
+                    FEATURE_NAMES['Study_Hours_Per_Day'],
+                    FEATURE_NAMES['Sleep_Hours_Per_Day'],
+                    FEATURE_NAMES['Physical_Activity_Hours_Per_Day'],
+                    FEATURE_NAMES['Social_Hours_Per_Day'],
+                    FEATURE_NAMES['Extracurricular_Hours_Per_Day']
+                ],
+                'Skenario Anda': [sim_study, sim_sleep, sim_activity, sim_social, sim_extra],
+                'Rata-rata Dataset': [
+                    df['Study_Hours_Per_Day'].mean(),
+                    df['Sleep_Hours_Per_Day'].mean(),
+                    df['Physical_Activity_Hours_Per_Day'].mean(),
+                    df['Social_Hours_Per_Day'].mean(),
+                    df['Extracurricular_Hours_Per_Day'].mean()
+                ]
+            })
+            
+            comparison_fig = px.bar(
+                comparison_data,
+                x='Parameter',
+                y=['Skenario Anda', 'Rata-rata Dataset'],
+                barmode='group',
+                title='Skenario Anda vs Rata-rata Dataset',
+                color_discrete_map={'Skenario Anda': '#3498db', 'Rata-rata Dataset': '#95a5a6'}
+            )
+            comparison_fig.update_layout(
+                xaxis_title="Jenis Aktivitas",
+                yaxis_title="Jumlah Jam",
+                height=400
+            )
+            st.plotly_chart(comparison_fig, use_container_width=True)
+        else:
+            st.info("📝 Isi form di sebelah kiri dan klik tombol 'Proses Prediksi Skenario' untuk melihat hasil")
     
     st.markdown("---")
     
@@ -416,12 +454,15 @@ with tab3:
             'Physical_Activity': df['Physical_Activity_Hours_Per_Day'].mean(),
             'Social_Hours': df['Social_Hours_Per_Day'].mean(),
             'Extracurricular': df['Extracurricular_Hours_Per_Day'].mean()
-        },
-        scenario_name: {
+        }
+    }
+    
+    # Tambahkan skenario custom hanya jika sudah diproses
+    if 'scenario_processed' in st.session_state and st.session_state.scenario_processed:
+        scenarios[scenario_name] = {
             'Study_Hours': sim_study, 'Sleep_Hours': sim_sleep, 'Physical_Activity': sim_activity,
             'Social_Hours': sim_social, 'Extracurricular': sim_extra
         }
-    }
     
     # Hitung prediksi untuk semua skenario
     scenario_results = []
@@ -430,8 +471,9 @@ with tab3:
                               params['Social_Hours'], params['Extracurricular']]])
         gpa = rf_reg_model.predict(input_reg)[0]
         
+        # Classifier menggunakan hanya 5 lifestyle features (tanpa GPA untuk menghindari data leakage)
         input_clf = np.array([[params['Study_Hours'], params['Sleep_Hours'], params['Physical_Activity'],
-                              params['Social_Hours'], params['Extracurricular'], gpa]])
+                              params['Social_Hours'], params['Extracurricular']]])
         stress_enc = rf_clf_model.predict(input_clf)[0]
         stress = le.inverse_transform([int(stress_enc)])[0]
         
@@ -465,18 +507,24 @@ with tab3:
     st.markdown("---")
     st.subheader("Rekomendasi Berdasarkan Skenario Anda")
     
-    if sim_gpa >= 3.5 and sim_stress == 'Low':
-        st.success("Skenario sangat baik! Anda mencapai GPA tinggi dengan stress rendah. Ini adalah kondisi ideal!")
-    elif sim_gpa >= 3.5 and sim_stress in ['Moderate', 'High']:
-        st.warning("GPA baik tetapi stress tinggi. Rekomendasi:\n- Coba tingkatkan jam tidur\n- Pertimbangkan mengurangi beban ekstrakurikuler\n- Perbanyak waktu untuk relaksasi")
-    elif sim_stress == 'High':
-        st.error("Stress tinggi terdeteksi. Rekomendasi:\n- **Prioritaskan tidur cukup** (7-9 jam per hari)\n- Kurangi beban belajar atau gunakan teknik belajar yang lebih efisien\n- Tingkatkan aktivitas fisik dan sosial untuk mengurangi stress")
-    elif sim_sleep < 6:
-        st.warning("Perhatian! Jam tidur terlalu rendah. Tidur cukup sangat penting untuk:\n- Meningkatkan performa akademik (GPA)\n- Mengurangi tingkat stress\n- Menjaga kesehatan mental dan fisik")
-    elif sim_activity < 1:
-        st.info("Saran: Tingkatkan aktivitas fisik ke minimal 1-2 jam per hari.\nActivitas fisik terbukti membantu:\n- Meningkatkan kesehatan mental\n- Mengurangi stress\n- Meningkatkan fokus belajar")
+    if 'scenario_processed' in st.session_state and st.session_state.scenario_processed:
+        sim_gpa = st.session_state.sim_gpa
+        sim_stress = st.session_state.sim_stress
+        
+        if sim_gpa >= 3.5 and sim_stress == 'Low':
+            st.success("Skenario sangat baik! Anda mencapai GPA tinggi dengan stress rendah. Ini adalah kondisi ideal!")
+        elif sim_gpa >= 3.5 and sim_stress in ['Moderate', 'High']:
+            st.warning("GPA baik tetapi stress tinggi. Rekomendasi:\n- Coba tingkatkan jam tidur\n- Pertimbangkan mengurangi beban ekstrakurikuler\n- Perbanyak waktu untuk relaksasi")
+        elif sim_stress == 'High':
+            st.error("Stress tinggi terdeteksi. Rekomendasi:\n- **Prioritaskan tidur cukup** (7-9 jam per hari)\n- Kurangi beban belajar atau gunakan teknik belajar yang lebih efisien\n- Tingkatkan aktivitas fisik dan sosial untuk mengurangi stress")
+        elif sim_sleep < 6:
+            st.warning("Perhatian! Jam tidur terlalu rendah. Tidur cukup sangat penting untuk:\n- Meningkatkan performa akademik (GPA)\n- Mengurangi tingkat stress\n- Menjaga kesehatan mental dan fisik")
+        elif sim_activity < 1:
+            st.info("Saran: Tingkatkan aktivitas fisik ke minimal 1-2 jam per hari.\nActivitas fisik terbukti membantu:\n- Meningkatkan kesehatan mental\n- Mengurangi stress\n- Meningkatkan fokus belajar")
+        else:
+            st.success("Skenario Anda terlihat seimbang dan sehat! Lanjutkan menjaga gaya hidup ini.")
     else:
-        st.success("Skenario Anda terlihat seimbang dan sehat! Lanjutkan menjaga gaya hidup ini.")
+        st.info("📝 Isi form di sebelah kiri dan klik tombol 'Proses Prediksi Skenario' untuk melihat rekomendasi")
 
 
 # Footer
