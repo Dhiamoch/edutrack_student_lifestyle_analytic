@@ -47,7 +47,12 @@ def load_models():
         le = joblib.load(os.path.join(models_dir, 'label_encoder.pkl'))
         feature_cols = joblib.load(os.path.join(models_dir, 'feature_cols.pkl'))
         
-        return rf_reg_model, rf_clf_model, le, feature_cols
+        # Load metadata jika ada
+        metadata = None
+        if os.path.exists(os.path.join(models_dir, 'model_metadata.pkl')):
+            metadata = joblib.load(os.path.join(models_dir, 'model_metadata.pkl'))
+        
+        return rf_reg_model, rf_clf_model, le, feature_cols, metadata
     
     except FileNotFoundError as e:
         st.error(f"❌ Salah satu file model tidak ditemukan: {str(e)}")
@@ -56,19 +61,131 @@ def load_models():
 
 # Load data dan models
 df = load_data()
-rf_reg_model, rf_clf_model, le, feature_cols = load_models()
+rf_reg_model, rf_clf_model, le, feature_cols, metadata = load_models()
+
+# ========== FRIENDLY VARIABLE NAMES MAPPING ==========
+FEATURE_NAMES = {
+    'Study_Hours_Per_Day': 'Jam Belajar Per Hari',
+    'Sleep_Hours_Per_Day': 'Jam Tidur Per Hari',
+    'Physical_Activity_Hours_Per_Day': 'Jam Aktivitas Fisik Per Hari',
+    'Social_Hours_Per_Day': 'Jam Bersosialisasi Per Hari',
+    'Extracurricular_Hours_Per_Day': 'Jam Ekstrakurikuler Per Hari',
+    'GPA': 'GPA',
+    'Stress_Level': 'Level Stress'
+}
+
+STRESS_COLORS = {
+    'Low': '#2ecc71',      # Hijau - Stress Rendah
+    'Moderate': '#f39c12',  # Oranye - Stress Sedang
+    'High': '#e74c3c'       # Merah - Stress Tinggi
+}
 
 # ========== JUDUL & SIDEBAR ==========
 st.title("Dashboard Analisis Gaya Hidup Mahasiswa")
 st.markdown("---")
 
-# ========== TAB-TAB ==========
-tab1, tab2, tab3 = st.tabs(["EDA & Visualisasi", "Prediksi Model", "Simulator What-If"])
+# Load metadata untuk info model
+if metadata:
+    model_info = f"Model Classifier: {metadata.get('best_classifier_model', 'N/A')} | Akurasi: {metadata.get('classifier_accuracy', 'N/A'):.2%}"
+else:
+    model_info = "Model Information: Available"
 
-# ========== TAB 1: EDA & VISUALISASI ==========
+st.caption(f"ℹ️ {model_info}")
+
+# ========== TAB-TAB ==========
+tab1, tab2, tab3 = st.tabs(["Overview", "Analyzer", "What If"])
+
+# ========== TAB 1: OVERVIEW ==========
 with tab1:
-    st.header("Analisis Data Eksploratori & Visualisasi Interaktif")
+    st.header("Overview Data Gaya Hidup Mahasiswa")
     
+    # Model Performance Info
+    col_info1, col_info2, col_info3 = st.columns(3)
+    with col_info1:
+        st.info("Model Regresi: Random Forest | Target: GPA")
+    
+    with col_info2:
+        if metadata:
+            st.success(f"Model Terpilih: {metadata.get('best_classifier_model', 'N/A')} | Akurasi: {metadata.get('classifier_accuracy', 'N/A'):.2%}")
+        else:
+            st.warning("Model metadata tidak tersedia")
+    
+    with col_info3:
+        if metadata and 'all_models_comparison' in metadata:
+            st.info(f"Total Model Dikomparasi: {len(metadata['all_models_comparison'])}")
+    
+    # Show detailed model comparison
+    if metadata and 'all_models_comparison' in metadata:
+        with st.expander("Perbandingan Semua Model Klasifikasi (Klik untuk expand)", expanded=False):
+            comparison_df = pd.DataFrame([
+                {'Model': model_name, 'Akurasi': f"{acc:.4f} ({acc:.2%})"}
+                for model_name, acc in sorted(metadata['all_models_comparison'].items(), key=lambda x: x[1], reverse=True)
+            ])
+            
+            st.markdown("### Hasil Perbandingan 4 Model dengan Cross-Validation 5-Fold:")
+            st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+            
+            st.markdown(f"""
+            **Model Terbaik: {metadata.get('best_classifier_model', 'N/A')}**
+            
+            Model ini dipilih berdasarkan akurasi tertinggi dari perbandingan:
+            - Logistic Regression dengan 5-Fold CV
+            - Random Forest Classifier dengan 5-Fold CV
+            - XGBoost dengan GridSearchCV (54 kombinasi parameter)
+            - XGBoost dengan RandomizedSearchCV (20 iterasi random)
+            """)
+    
+    st.markdown("---")
+    
+    # Summary Statistics Cards
+    st.subheader("Ringkasan Data")
+    col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+    
+    with col_stat1:
+        st.metric("Jumlah Mahasiswa", len(df))
+    
+    with col_stat2:
+        st.metric("Rata-rata GPA", f"{df['GPA'].mean():.2f}")
+    
+    with col_stat3:
+        stress_counts = df['Stress_Level'].value_counts()
+        st.metric("Stress Rendah", stress_counts.get('Low', 0))
+    
+    with col_stat4:
+        st.metric("Rata-rata Jam Tidur", f"{df['Sleep_Hours_Per_Day'].mean():.1f} jam")
+    
+    st.markdown("---")
+    
+    # Distribution Charts
+    col_dist1, col_dist2 = st.columns(2)
+    
+    with col_dist1:
+        st.subheader("Distribusi GPA")
+        gpa_hist = px.histogram(
+            df,
+            x='GPA',
+            nbins=20,
+            title='Histogram GPA',
+            color_discrete_sequence=['#3498db']
+        )
+        gpa_hist.update_layout(height=400, showlegend=False)
+        st.plotly_chart(gpa_hist, use_container_width=True)
+    
+    with col_dist2:
+        st.subheader("Distribusi Level Stress")
+        stress_dist = df['Stress_Level'].value_counts()
+        stress_pie = px.pie(
+            values=stress_dist.values,
+            names=stress_dist.index,
+            title='Proporsi Level Stress',
+            color_discrete_map=STRESS_COLORS
+        )
+        stress_pie.update_layout(height=400)
+        st.plotly_chart(stress_pie, use_container_width=True)
+    
+    st.markdown("---")
+    
+    # Scatter Plots
     col1, col2 = st.columns(2)
     
     with col1:
@@ -81,11 +198,12 @@ with tab1:
             size='Sleep_Hours_Per_Day',
             hover_data=['Study_Hours_Per_Day', 'Sleep_Hours_Per_Day', 'GPA', 'Stress_Level'],
             title='Jam Belajar vs GPA (Ukuran: Jam Tidur)',
-            color_discrete_map={'Low': '#2ecc71', 'Moderate': '#f39c12', 'High': '#e74c3c'},
+            color_discrete_map=STRESS_COLORS,
             labels={
-                'Study_Hours_Per_Day': 'Jam Belajar Per Hari',
-                'GPA': 'GPA',
-                'Stress_Level': 'Level Stress'
+                'Study_Hours_Per_Day': FEATURE_NAMES['Study_Hours_Per_Day'],
+                'GPA': FEATURE_NAMES['GPA'],
+                'Stress_Level': FEATURE_NAMES['Stress_Level'],
+                'Sleep_Hours_Per_Day': FEATURE_NAMES['Sleep_Hours_Per_Day']
             }
         )
         scatter_fig.update_layout(height=500)
@@ -101,36 +219,90 @@ with tab1:
             size='Study_Hours_Per_Day',
             hover_data=['Study_Hours_Per_Day', 'Sleep_Hours_Per_Day', 'GPA', 'Stress_Level'],
             title='Jam Tidur vs GPA (Ukuran: Jam Belajar)',
-            color_discrete_map={'Low': '#2ecc71', 'Moderate': '#f39c12', 'High': '#e74c3c'},
+            color_discrete_map=STRESS_COLORS,
             labels={
-                'Sleep_Hours_Per_Day': 'Jam Tidur Per Hari',
-                'GPA': 'GPA',
-                'Stress_Level': 'Level Stress'
+                'Sleep_Hours_Per_Day': FEATURE_NAMES['Sleep_Hours_Per_Day'],
+                'GPA': FEATURE_NAMES['GPA'],
+                'Stress_Level': FEATURE_NAMES['Stress_Level'],
+                'Study_Hours_Per_Day': FEATURE_NAMES['Study_Hours_Per_Day']
             }
         )
         scatter_fig2.update_layout(height=500)
         st.plotly_chart(scatter_fig2, use_container_width=True)
+
+
+# ========== TAB 2: ANALYZER ==========
+with tab2:
+    st.header("Analisa Mendalam Fitur Data")
+    st.markdown("Analisis distribusi fitur berdasarkan level stress")
     
+    st.markdown("---")
+    
+    # Correlation Heatmap
+    st.subheader("Correlation Matrix - Hubungan Antar Fitur")
+    
+    # Prepare data for correlation (exclude categorical columns)
+    numeric_cols = feature_cols + ['GPA']
+    corr_matrix = df[numeric_cols].corr()
+    
+    heatmap_fig = go.Figure(data=go.Heatmap(
+        z=corr_matrix.values,
+        x=[FEATURE_NAMES.get(col, col) for col in corr_matrix.columns],
+        y=[FEATURE_NAMES.get(col, col) for col in corr_matrix.columns],
+        colorscale='RdBu',
+        zmid=0,
+        zmin=-1,
+        zmax=1,
+        text=np.round(corr_matrix.values, 2),
+        texttemplate='%{text:.2f}',
+        textfont={"size": 10},
+        colorbar=dict(title="Korelasi")
+    ))
+    
+    heatmap_fig.update_layout(
+        title='Matriks Korelasi Fitur-Fitur',
+        height=500,
+        width=800
+    )
+    st.plotly_chart(heatmap_fig, use_container_width=True)
+    
+    st.markdown("---")
+    
+    # ========== EDA & VISUALISASI ==========
     st.subheader("Box Plot: Fitur Berdasarkan Level Stress")
     
     feature_select = st.selectbox(
         "Pilih Fitur untuk Divisualisasikan:",
-        ['Study_Hours_Per_Day', 'Sleep_Hours_Per_Day', 'Physical_Activity_Hours_Per_Day', 
-         'Social_Hours_Per_Day', 'Extracurricular_Hours_Per_Day', 'GPA']
+        {
+            'Jam Belajar Per Hari': 'Study_Hours_Per_Day',
+            'Jam Tidur Per Hari': 'Sleep_Hours_Per_Day',
+            'Jam Aktivitas Fisik Per Hari': 'Physical_Activity_Hours_Per_Day',
+            'Jam Bersosialisasi Per Hari': 'Social_Hours_Per_Day',
+            'Jam Ekstrakurikuler Per Hari': 'Extracurricular_Hours_Per_Day',
+            'GPA': 'GPA'
+        }
     )
+    feature_select_actual = {
+        'Jam Belajar Per Hari': 'Study_Hours_Per_Day',
+        'Jam Tidur Per Hari': 'Sleep_Hours_Per_Day',
+        'Jam Aktivitas Fisik Per Hari': 'Physical_Activity_Hours_Per_Day',
+        'Jam Bersosialisasi Per Hari': 'Social_Hours_Per_Day',
+        'Jam Ekstrakurikuler Per Hari': 'Extracurricular_Hours_Per_Day',
+        'GPA': 'GPA'
+    }[feature_select]
     
     box_fig = px.box(
         df,
         x='Stress_Level',
-        y=feature_select,
+        y=feature_select_actual,
         color='Stress_Level',
         points='outliers',
-        color_discrete_map={'Low': '#2ecc71', 'Moderate': '#f39c12', 'High': '#e74c3c'},
+        color_discrete_map=STRESS_COLORS,
         labels={
-            'Stress_Level': 'Level Stress',
-            feature_select: feature_select.replace('_', ' ')
+            'Stress_Level': FEATURE_NAMES['Stress_Level'],
+            feature_select_actual: feature_select
         },
-        title=f'Distribusi {feature_select.replace("_", " ")} Berdasarkan Level Stress'
+        title=f'Distribusi {feature_select} Berdasarkan Level Stress'
     )
     box_fig.update_layout(height=500, showlegend=False)
     st.plotly_chart(box_fig, use_container_width=True)
@@ -141,114 +313,32 @@ with tab1:
     st.dataframe(stress_stats, use_container_width=True)
 
 
-# ========== TAB 2: PREDIKSI MODEL ==========
-with tab2:
-    st.header("Prediksi Model")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Model Prediksi GPA")
-        st.info("Random Forest Regressor")
-        
-        st.markdown("### Input Data Gaya Hidup Mahasiswa:")
-        study_hours = st.slider("Jam Belajar Per Hari", 0.0, 12.0, 5.0, step=0.5)
-        sleep_hours = st.slider("Jam Tidur Per Hari", 0.0, 12.0, 7.0, step=0.5)
-        physical_activity = st.slider("Jam Aktivitas Fisik Per Hari", 0.0, 10.0, 2.0, step=0.5)
-        social_hours = st.slider("Jam Bersosialisasi Per Hari", 0.0, 10.0, 2.0, step=0.5)
-        extracurricular = st.slider("Jam Ekstrakurikuler Per Hari", 0.0, 10.0, 2.0, step=0.5)
-        
-        # Predict GPA
-        input_data_reg = np.array([[study_hours, sleep_hours, physical_activity, social_hours, extracurricular]])
-        predicted_gpa = rf_reg_model.predict(input_data_reg)[0]
-        
-        # Display prediction
-        st.metric("GPA Terprediksi", f"{predicted_gpa:.2f}", delta=f"(Rentang: 0.0 - 4.0)")
-        
-        # Add interpretation
-        if predicted_gpa >= 3.5:
-            st.success("Performa Sangat Baik!")
-        elif predicted_gpa >= 3.0:
-            st.info("Performa Baik")
-        elif predicted_gpa >= 2.5:
-            st.warning("Performa Sedang")
-        else:
-            st.error("Performa Kurang Baik")
-    
-    with col2:
-        st.subheader("Model Prediksi Level Stress")
-        st.info("Random Forest Classifier")
-        
-        st.markdown("### Menggunakan GPA dari Prediksi Sebelumnya")
-        
-        # Predict Stress Level
-        input_data_clf = np.array([[study_hours, sleep_hours, physical_activity, social_hours, extracurricular, predicted_gpa]])
-        stress_pred_encoded = rf_clf_model.predict(input_data_clf)[0]
-        stress_pred_proba = rf_clf_model.predict_proba(input_data_clf)[0]
-        
-        stress_level = le.inverse_transform([int(stress_pred_encoded)])[0]
-        
-        # Display prediction
-        st.metric("Level Stress Terprediksi", stress_level)
-        
-        # Probability for each stress level
-        st.markdown("### Kepercayaan Prediksi:")
-        for idx, label in enumerate(le.classes_):
-            st.write(f"{label}: {stress_pred_proba[idx]:.2%}")
-        
-        # Add color-coded message
-        if stress_level == 'Low':
-            st.success("Manajemen stress baik!")
-        elif stress_level == 'Moderate':
-            st.warning("Stress sedang - pertimbangkan keseimbangan gaya hidup")
-        else:
-            st.error("Stress tinggi - intervensi mendesak direkomendasikan")
-    
-    # Perbandingan dengan dataset
-    st.markdown("---")
-    st.subheader("Perbandingan dengan Distribusi Dataset")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        avg_gpa = df['GPA'].mean()
-        st.metric("Rata-rata GPA (Dataset)", f"{avg_gpa:.2f}", delta=f"{predicted_gpa - avg_gpa:+.2f}")
-    
-    with col2:
-        stress_dist = df['Stress_Level'].value_counts()
-        st.metric("Level Stress Paling Umum", stress_dist.idxmax(), delta=f"{stress_dist.max()} mahasiswa")
-    
-    with col3:
-        avg_study = df['Study_Hours_Per_Day'].mean()
-        st.metric("Rata-rata Jam Belajar", f"{avg_study:.1f}", delta=f"{study_hours - avg_study:+.1f}")
-# ========== TAB 3: SIMULATOR WHAT-IF ==========
+# ========== TAB 3: WHAT IF ==========
 with tab3:
-    st.header("Simulator What-If")
-    st.markdown("Simulasikan berbagai skenario gaya hidup dan lihat dampaknya terhadap GPA dan Level Stress!")
+    st.header("What If - Simulator Skenario")
+    st.markdown("Bandingkan berbagai skenario gaya hidup dan lihat dampaknya terhadap GPA dan Level Stress!")
     
     st.markdown("---")
     
+    # Custom Scenario
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("Pembuat Skenario")
-        
+        st.markdown("### Buat Skenario Anda:")
         scenario_name = st.text_input("Nama Skenario", "Skenario Saya")
-        
-        st.markdown("### Sesuaikan Parameter Gaya Hidup:")
         
         slider_col1, slider_col2 = st.columns(2)
         
         with slider_col1:
             sim_study = st.slider("Jam Belajar", 0.0, 12.0, 5.0, step=0.5, key="sim_study")
-            sim_activity = st.slider("Aktivitas Fisik", 0.0, 10.0, 2.0, step=0.5, key="sim_activity")
+            sim_activity = st.slider("Aktivitas Fisik (Jam)", 0.0, 10.0, 2.0, step=0.5, key="sim_activity")
             sim_social = st.slider("Jam Bersosialisasi", 0.0, 10.0, 2.0, step=0.5, key="sim_social")
         
         with slider_col2:
             sim_sleep = st.slider("Jam Tidur", 0.0, 12.0, 7.0, step=0.5, key="sim_sleep")
             sim_extra = st.slider("Jam Ekstrakurikuler", 0.0, 10.0, 2.0, step=0.5, key="sim_extra")
         
-        # Predict for scenario
+        # Predict for custom scenario
         sim_input_reg = np.array([[sim_study, sim_sleep, sim_activity, sim_social, sim_extra]])
         sim_gpa = rf_reg_model.predict(sim_input_reg)[0]
         
@@ -257,7 +347,7 @@ with tab3:
         sim_stress = le.inverse_transform([int(sim_stress_encoded)])[0]
     
     with col2:
-        st.subheader("Hasil Simulasi")
+        st.markdown("### Hasil Skenario Anda:")
         
         result_col1, result_col2 = st.columns(2)
         
@@ -267,10 +357,16 @@ with tab3:
         with result_col2:
             st.metric("Level Stress Terprediksi", sim_stress)
         
-        # Buat grafik perbandingan
+        # Grafik perbandingan
         comparison_data = pd.DataFrame({
-            'Parameter': ['Jam Belajar', 'Jam Tidur', 'Aktivitas Fisik', 'Jam Bersosialisasi', 'Jam Ekstrakurikuler'],
-            'Input Anda': [sim_study, sim_sleep, sim_activity, sim_social, sim_extra],
+            'Parameter': [
+                FEATURE_NAMES['Study_Hours_Per_Day'],
+                FEATURE_NAMES['Sleep_Hours_Per_Day'],
+                FEATURE_NAMES['Physical_Activity_Hours_Per_Day'],
+                FEATURE_NAMES['Social_Hours_Per_Day'],
+                FEATURE_NAMES['Extracurricular_Hours_Per_Day']
+            ],
+            'Skenario Anda': [sim_study, sim_sleep, sim_activity, sim_social, sim_extra],
             'Rata-rata Dataset': [
                 df['Study_Hours_Per_Day'].mean(),
                 df['Sleep_Hours_Per_Day'].mean(),
@@ -283,17 +379,22 @@ with tab3:
         comparison_fig = px.bar(
             comparison_data,
             x='Parameter',
-            y=['Input Anda', 'Rata-rata Dataset'],
+            y=['Skenario Anda', 'Rata-rata Dataset'],
             barmode='group',
             title='Skenario Anda vs Rata-rata Dataset',
-            color_discrete_map={'Input Anda': '#3498db', 'Rata-rata Dataset': '#95a5a6'}
+            color_discrete_map={'Skenario Anda': '#3498db', 'Rata-rata Dataset': '#95a5a6'}
+        )
+        comparison_fig.update_layout(
+            xaxis_title="Jenis Aktivitas",
+            yaxis_title="Jumlah Jam",
+            height=400
         )
         st.plotly_chart(comparison_fig, use_container_width=True)
     
     st.markdown("---")
     
-    # Perbandingan banyak skenario
-    st.subheader("Bandingkan Berbagai Skenario")
+    # Predefined Scenarios Comparison
+    st.subheader("Perbandingan Skenario Terdefinisi")
     
     # Predefined scenarios
     scenarios = {
@@ -309,14 +410,14 @@ with tab3:
             'Study_Hours': 4.0, 'Sleep_Hours': 9.0, 'Physical_Activity': 4.0,
             'Social_Hours': 4.0, 'Extracurricular': 3.0
         },
-        "Mahasiswa Rata-rata": {
+        "Mahasiswa Rata-rata (Dataset)": {
             'Study_Hours': df['Study_Hours_Per_Day'].mean(),
             'Sleep_Hours': df['Sleep_Hours_Per_Day'].mean(),
             'Physical_Activity': df['Physical_Activity_Hours_Per_Day'].mean(),
             'Social_Hours': df['Social_Hours_Per_Day'].mean(),
             'Extracurricular': df['Extracurricular_Hours_Per_Day'].mean()
         },
-        "Skenario Anda": {
+        scenario_name: {
             'Study_Hours': sim_study, 'Sleep_Hours': sim_sleep, 'Physical_Activity': sim_activity,
             'Social_Hours': sim_social, 'Extracurricular': sim_extra
         }
@@ -324,7 +425,7 @@ with tab3:
     
     # Hitung prediksi untuk semua skenario
     scenario_results = []
-    for scenario_name, params in scenarios.items():
+    for scen_name, params in scenarios.items():
         input_reg = np.array([[params['Study_Hours'], params['Sleep_Hours'], params['Physical_Activity'],
                               params['Social_Hours'], params['Extracurricular']]])
         gpa = rf_reg_model.predict(input_reg)[0]
@@ -335,9 +436,9 @@ with tab3:
         stress = le.inverse_transform([int(stress_enc)])[0]
         
         scenario_results.append({
-            'Skenario': scenario_name,
-            'Jam Belajar': params['Study_Hours'],
-            'Jam Tidur': params['Sleep_Hours'],
+            'Skenario': scen_name,
+            FEATURE_NAMES['Study_Hours_Per_Day']: params['Study_Hours'],
+            FEATURE_NAMES['Sleep_Hours_Per_Day']: params['Sleep_Hours'],
             'GPA': gpa,
             'Level Stress': stress
         })
@@ -345,16 +446,16 @@ with tab3:
     results_df = pd.DataFrame(scenario_results)
     st.dataframe(results_df, use_container_width=True)
     
-    # Visualisasi: GPA vs Jam Belajar untuk semua skenario
+    # Visualisasi Scatter
     scenario_viz = px.scatter(
         results_df,
         x='GPA',
-        y='Jam Belajar',
+        y=FEATURE_NAMES['Study_Hours_Per_Day'],
         color='Level Stress',
-        size='Jam Tidur',
-        hover_data=['Skenario', 'GPA', 'Jam Belajar', 'Jam Tidur', 'Level Stress'],
-        title='Skenario: GPA vs Jam Belajar (Ukuran: Jam Tidur)',
-        color_discrete_map={'Low': '#2ecc71', 'Moderate': '#f39c12', 'High': '#e74c3c'},
+        size=FEATURE_NAMES['Sleep_Hours_Per_Day'],
+        hover_data=['Skenario', 'GPA', FEATURE_NAMES['Study_Hours_Per_Day'], FEATURE_NAMES['Sleep_Hours_Per_Day'], 'Level Stress'],
+        title='Perbandingan Skenario: GPA vs Jam Belajar (Ukuran: Jam Tidur)',
+        color_discrete_map=STRESS_COLORS,
         text='Skenario'
     )
     scenario_viz.update_traces(textposition='top center')
@@ -362,20 +463,20 @@ with tab3:
     
     # Rekomendasi
     st.markdown("---")
-    st.subheader("Rekomendasi")
+    st.subheader("Rekomendasi Berdasarkan Skenario Anda")
     
     if sim_gpa >= 3.5 and sim_stress == 'Low':
-        st.success("Skenario sangat baik! Anda mencapai GPA tinggi dengan stress rendah. Ini ideal!")
+        st.success("Skenario sangat baik! Anda mencapai GPA tinggi dengan stress rendah. Ini adalah kondisi ideal!")
     elif sim_gpa >= 3.5 and sim_stress in ['Moderate', 'High']:
-        st.warning("GPA baik tapi stress tinggi. Pertimbangkan mengurangi beban kerja atau meningkatkan jam tidur.")
+        st.warning("GPA baik tetapi stress tinggi. Rekomendasi:\n- Coba tingkatkan jam tidur\n- Pertimbangkan mengurangi beban ekstrakurikuler\n- Perbanyak waktu untuk relaksasi")
     elif sim_stress == 'High':
-        st.error("Stress tinggi terdeteksi. Rekomendasi:\n- Tingkatkan jam tidur\n- Kurangi jam belajar atau tingkatkan efisiensi\n- Tingkatkan aktivitas sosial/fisik untuk mengurangi stress")
+        st.error("Stress tinggi terdeteksi. Rekomendasi:\n- **Prioritaskan tidur cukup** (7-9 jam per hari)\n- Kurangi beban belajar atau gunakan teknik belajar yang lebih efisien\n- Tingkatkan aktivitas fisik dan sosial untuk mengurangi stress")
     elif sim_sleep < 6:
-        st.warning("Jam tidur terlalu rendah! Tidur cukup sangat penting untuk GPA dan manajemen stress.")
+        st.warning("Perhatian! Jam tidur terlalu rendah. Tidur cukup sangat penting untuk:\n- Meningkatkan performa akademik (GPA)\n- Mengurangi tingkat stress\n- Menjaga kesehatan mental dan fisik")
     elif sim_activity < 1:
-        st.info("Pertimbangkan meningkatkan aktivitas fisik untuk kesehatan mental dan manajemen stress yang lebih baik.")
+        st.info("Saran: Tingkatkan aktivitas fisik ke minimal 1-2 jam per hari.\nActivitas fisik terbukti membantu:\n- Meningkatkan kesehatan mental\n- Mengurangi stress\n- Meningkatkan fokus belajar")
     else:
-        st.success("Skenario Anda terlihat seimbang! Lanjutkan menjaga gaya hidup ini.")
+        st.success("Skenario Anda terlihat seimbang dan sehat! Lanjutkan menjaga gaya hidup ini.")
 
 
 # Footer
